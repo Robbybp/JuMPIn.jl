@@ -19,6 +19,8 @@
 
 import Graphs
 import BipartiteMatching as BM
+import GraphsMatching as GM
+import SparseArrays
 
 
 """
@@ -49,15 +51,24 @@ function maximum_matching(graph::Graphs.Graph, set1::Set)
     if !_is_valid_bipartition(graph, set1)
         throw(Exception)
     end
-    n_nodes = Graphs.nv(graph)
-    card1 = length(set1)
-    nodes1 = sort([node for node in set1])
-    set2 = setdiff(Set(1:n_nodes), set1)
-    nodes2 = sort([node for node in set2])
-    edge_set = Set((n1, n2) for n1 in nodes1 for n2 in Graphs.neighbors(graph, n1))
-    amat = BitArray{2}((r, c) in edge_set for r in nodes1, c in nodes2)
-    matching, _ = BM.findmaxcardinalitybipartitematching(amat)
-    # Translate row/column coordinates back into nodes of the graph
-    graph_matching = Dict(nodes1[r] => nodes2[c] for (r, c) in matching)
-    return graph_matching
+    nvert = Graphs.nv(graph)
+    weights = SparseArrays.spzeros(nvert, nvert)
+    for e in Graphs.edges(graph)
+        weights[Graphs.src(e), Graphs.dst(e)] = 1.0
+    end
+    println("Beginning maximum weight maximal matching")
+    result = GM.maximum_weight_maximal_matching(
+        graph,
+        weights;
+        algorithm = GM.HungarianAlgorithm(),
+        #algorithm = GM.LPAlgorithm(),
+        optimizer = HiGHS.Optimizer,
+    )
+    println("Done with maximum weight maximal matching")
+    matching = Dict(
+        # The GraphsMatching convention is that mate[n] is -1 if n is unmatched.
+        # Calling functions need a map from set1 nodes to set2 (other) nodes.
+        n1 => result.mate[n1] for n1 in set1 if result.mate[n1] != -1
+    )
+    return matching
 end
