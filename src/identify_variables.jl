@@ -118,9 +118,12 @@ Each variable appears at most one time in the returned vector.
 
 """
 function identify_unique_variables(
-    constraint::JuMP.ConstraintRef,
+    constraint::JuMP.ConstraintRef;
+    linear_only::Bool = false,
 )::Vector{JuMP.VariableRef}
-    return identify_unique_variables(constraint, constraint.index)
+    return identify_unique_variables(
+        constraint, constraint.index, linear_only = linear_only
+    )
 end
 
 
@@ -139,11 +142,12 @@ constraint or a nonlinear constraint.
 """
 function identify_unique_variables(
     constraint::JuMP.ConstraintRef,
-    index::MOI.ConstraintIndex,
+    index::MOI.ConstraintIndex;
+    linear_only::Bool = false,
 )::Vector{JuMP.VariableRef}
     model = constraint.model
     fcn = MOI.get(model, MOI.ConstraintFunction(), constraint)
-    varidxs = identify_unique_variables(fcn)
+    varidxs = identify_unique_variables(fcn, linear_only = linear_only)
     varrefs = [JuMP.VariableRef(model, idx) for idx in varidxs]
     return varrefs
 end
@@ -164,8 +168,12 @@ constraint or a nonlinear constraint.
 """
 function identify_unique_variables(
     constraint::JuMP.ConstraintRef,
-    index::MOI.Nonlinear.ConstraintIndex,
+    index::MOI.Nonlinear.ConstraintIndex;
+    linear_only::Bool = false,
 )::Vector{JuMP.VariableRef}
+    if linear_only
+        throw(ArgumentError("linear_only is not supported with @NLConstraint"))
+    end
     model = constraint.model
     nlmod = model.nlp_model
     nlcons = nlmod.constraints
@@ -218,15 +226,17 @@ function identify_unique_variables(
         MOI.ScalarAffineFunction,
         MOI.ScalarQuadraticFunction,
         MOI.ScalarNonlinearFunction,
-    },
+    };
+    linear_only::Bool = false,
 )::Vector{MOI.VariableIndex}
-    variables = _identify_variables(fcn)
+    variables = _identify_variables(fcn, linear_only = linear_only)
     return _filter_duplicates(variables)
 end
 
-# This method is used to handle function-in-set constraints.
+# This method is used to handle variable-in-set constraints.
 function identify_unique_variables(
-    var::MOI.VariableIndex
+    var::MOI.VariableIndex;
+    linear_only::Bool = false,
 )::Vector{MOI.VariableIndex}
     return [var]
 end
@@ -235,7 +245,8 @@ end
 # non-Affine/Quadratic/Nonlinear function. Should probably implement
 # some default method to catch that.
 function identify_unique_variables(
-    fcn::MOI.AbstractVectorFunction
+    fcn::MOI.AbstractVectorFunction;
+    linear_only::Bool = false,
 )::Vector{MOI.VariableIndex}
     throw(TypeError(
         fcn,
@@ -268,10 +279,39 @@ function _identify_variables(
         MOI.ScalarAffineFunction,
         MOI.ScalarQuadraticFunction,
         MOI.ScalarNonlinearFunction,
-    },
+    };
+    linear_only::Bool = false,
 )::Vector{MOI.VariableIndex}
-    variables = Vector{MOI.VariableIndex}()
-    _collect_variables!(variables, fcn)
+    if linear_only
+        repn = normalize_function(fcn)
+        # repn should be a NormalizedExpression struct, that supports
+        # .constant, .linear, and .nonlinear
+        # 
+        # To utilize MOI's function types, should I support
+        # .affine and .nonlinear?
+        # Can repn.linear just be a ScalarAffineFunction?
+        #
+        # Need to consolidate terms to (a) avoid duplicates and (b) filter
+        # variables with coefficients of zero
+        linear_terms = _consolidate_terms(repn.affine)
+
+        # Identify linear variables (no duplicates here)
+        linear_variables = [
+            term.variable for term in linear_terms if term.coefficient != 0.0
+        ]
+
+        # Identify nonlinear variables
+        nonlinear_variables = Vector{MOI.VariableIndex}()
+        _collect_variables!(nonlinear_variables, repn.nonlinear)
+        nonlinear_variables = Set(nonlinear_variables)
+
+        # Filter out linear variables that are also nonlinear
+        filter!(x -> !(x in nonlinear_variables), linear_variables)
+        variables = linear_variables
+    else
+        variables = Vector{MOI.VariableIndex}()
+        _collect_variables!(variables, fcn)
+    end
     return variables
 end
 
