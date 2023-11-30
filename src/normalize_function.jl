@@ -53,41 +53,35 @@ function normalize_function(fcn::MOI.ScalarQuadraticFunction)::NormalizedExpress
 end
 
 function normalize_function(fcn::MOI.ScalarNonlinearFunction)::NormalizedExpressionTuple
-    # Here I need a function that recursively builds affine and nonlinear subexpressions
-    #
-    # Again, it seems wrong to enforce the type of these terms' coefficients
-    affine_terms = Vector{MOI.ScalarAffineTerm{Float64}}()
-
-    # Initialize with trivial affine and nonlinear expressions
-    affine = MOI.ScalarAffineFunction(affine_terms, 0.0)
-    nonlinear = MOI.ScalarNonlinearFunction(:+, [0.0])
-    _collect_subexpressions!(fcn, affine, nonlinear)
-    return (affine, nonlinear)
-end
-
-# _collect_subexpressions! needs to be implemented for every node that can appear
-# in ScalarNonlinearFunction.
-#
-# The following won't work, as it doesn't know whether this affine function is
-# being being multiplied by some variable expression.
-# I need to handle every combination of operator and argument type.
-# I will likely need to build up expression from leaf-to-root, although I may
-# be able to do some top-down processing for efficiency.
-function _collect_subexpressions!(
-    fcn::MOI.ScalarAffineFunction,
-    affine::MOI.ScalarAffineFunction,
-    nonlinear::MOI.ScalarQuadraticFunction,
-)
-    for term in fcn.terms
-        add_to_expression!(affine, term)
+    processed_args = Vector{Any}()
+    for arg in fcn.args
+        if _is_leaf(arg)
+            # Note that we still may want to process ScalarQuadraticFunction and
+            # ScalarAffineFunction to detect whether they resolve to a simpler
+            # form.
+            push!(processed_args, arg)
+        else
+            # arg <: ScalarNonlinearFunction
+            # We need to construct a new normalized expression here. Without
+            # considering all arguments simultaneously, we can't determine
+            # how to build up the current affine and nonlinear subexpressions.
+            # And a normalized expression is the data structure that lets us
+            # process the arguments.
+            # TODO: Would it be easier if we convert all arguments into
+            # normalized expressions? Rather than just ScalarNonlinearFunction?
+            #
+            # Imagine *(0, SNF). This can be handled more efficiently with zero
+            # a constant. We don't have to check whether its normalized expr
+            # resolves to a trivial value.
+            #
+            # should normalize_function be able to return a simpler type (e.g.
+            # constant) to help with the case where the SNF reduces?
+            # The user-facing function should be type-stable, implying that this
+            # recursive procesing should use its own function?
+            norm_subexpr = normalize_function(arg)
+            push!(processed_args, norm_subexpr)
+        end
     end
-    add_to_expression!(affine, fcn.constant)
-    return (affine, nonlinear)
-end
-
-function _collect_subexpressions!(
-    fcn::MOI.ScalarQuadraticFunction,
-    affine::MOI.ScalarAffineFunction,
-    nonlinear::MOI.ScalarQuadraticFunction,
-)
+    # Now I just have to implement _combine_subexpressions! for every operator
+    return _combine_subexpressions!(fcn.head, processed_args)
 end
