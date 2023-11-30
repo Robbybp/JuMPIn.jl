@@ -22,6 +22,9 @@ module MathProgIncidence
 # Methods to identify equality constraints
 include("get_equality.jl")
 
+# Methods to normalize MOI functions
+include("normalize_function.jl")
+
 # Methods to identify variables
 include("identify_variables.jl")
 
